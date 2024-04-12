@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.13;
+
+import {Test, console2} from "forge-std/Test.sol";
+import {Degenator} from "src/Degenator.sol";
+import {DegenStaking} from "src/DegenStaking.sol"; 
+import {IERC20} from "forge-std/interfaces/IERC20.sol";
+import {IUniswapV2Router02} from "src/interfaces/IUniswapV2Router02.sol";
+
+
+contract DegenStakingTest is Test {
+    Degenator degenator;
+    DegenStaking staking;
+
+    address bob = address(69);
+    address alice = address(420);
+    address charlie = address(42069);
+
+    address immutable WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
+    IUniswapV2Router02 immutable uniswapRouter = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+    address owner;
+
+    function setUp() public {
+        address computedStaking = vm.computeCreateAddress(address(this), 2); 
+        degenator = new Degenator(computedStaking, address(this));
+        staking = new DegenStaking(degenator); 
+        owner = degenator.owner();
+        deal(address(degenator), alice, 500_000_000e18);
+    }
+
+    function testTiersSetup() public {
+        //pleb
+        (uint256 stakingDuration, uint256 apy, uint256 bonus, uint256 unstakeDuration) = staking.tiers(0);  
+
+        assertEq(stakingDuration, 0); 
+        assertEq(apy, 1e18); 
+        assertEq(bonus, 0); 
+        assertEq(unstakeDuration, 4 hours); 
+
+        (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(1);  
+
+        assertEq(stakingDuration, 1 days); 
+        assertEq(apy, 200); 
+        assertEq(bonus, 10); 
+        assertEq(unstakeDuration, 12 hours); 
+        
+        //chad
+        (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(2);  
+
+        assertEq(stakingDuration, 3 days); 
+        assertEq(apy, 300); 
+        assertEq(bonus, 90); 
+        assertEq(unstakeDuration, 24 hours); 
+        
+        //patron
+        (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(3);  
+
+        assertEq(stakingDuration, 7 days); 
+        assertEq(apy, 700); 
+        assertEq(bonus, 420); 
+        assertEq(unstakeDuration, 36 hours); 
+        
+        //degenator
+        (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(4);  
+
+        assertEq(stakingDuration, 14 days); 
+        assertEq(apy, 1400); 
+        assertEq(bonus, 1680); 
+        assertEq(unstakeDuration, 48 hours); 
+    }
+
+    function testStakePleb(uint96 amount) public {
+        vm.assume(amount > 1e18); 
+        vm.assume(amount <= degenator.balanceOf(alice)); 
+
+        vm.prank(alice); 
+        staking.stake(amount, 0);  
+        
+        (uint256 deposited, uint256 startTime, uint256 endTime) = staking.stakingBalances(alice, 0); 
+
+        assertEq(deposited, amount - (amount * degenator.TAX_AMOUNT()) / 100); 
+        assertEq(startTime, block.timestamp); 
+        assertEq(endTime, 0); 
+
+        (deposited, startTime, endTime) = staking.stakingBalances(alice, 1); 
+        assertEq(deposited, 0); 
+        assertEq(startTime, 0); 
+        assertEq(endTime, 0); 
+    }
+
+    function testUnstakePleb() public {
+        testStakePleb(100e18); 
+        
+        skip(1 days * 365); 
+        
+        vm.prank(alice); 
+        staking.unstake(0); 
+        (, , uint256 endTime) = staking.stakingBalances(alice, 0); 
+        assertEq(endTime, block.timestamp); 
+    }
+
+    function testClaimPleb() public {
+        testUnstakePleb(); 
+
+        skip(4 hours); 
+
+        vm.prank(alice); 
+        uint256 returned = staking.claim(0); 
+        console2.log("amount returned", returned); 
+    }
+
+}

@@ -4,12 +4,11 @@ pragma solidity >=0.8.19;
 import {ERC20} from "solmate/tokens/ERC20.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
 import {Owned} from "solmate/auth/Owned.sol";
-import {ClockStaking} from "./ClockStaking.sol";
 import {IUniswapV2Factory} from "./interfaces/IUniswapV2Factory.sol";
 import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
 
 contract Degenator is ERC20, Owned {
-    uint256 public TAX_AMOUNT = 10;
+    uint256 public TAX_AMOUNT = 5;
     uint256 public TAX_POT_MAX = 500_000e18;
     uint256 public MAX_TRANSFER_AMOUNT = 1_000_000_000e18 * 2 / 10; //TODO: come back to this
 
@@ -31,9 +30,11 @@ contract Degenator is ERC20, Owned {
     bool public whaleProtectionPeriod = false;
     //@dev bool to control taxing during trasfers for dex swaps
     bool public isTaxOn = false;
+    bool internal inSwapEvent = false; 
 
     error TaxTooHigh();
     error WhaleProtectionActive();
+    error TradingIsPaused(); 
 
     event TaxAmountChanged(uint256 newTaxAmount);
     event TradingPaused(bool, uint256 block);
@@ -44,8 +45,13 @@ contract Degenator is ERC20, Owned {
 
     modifier onlyStaking() virtual {
         require(msg.sender == stakingContract, "UNAUTHORIZED");
-
         _;
+    }
+
+    modifier swapEvent() {
+      inSwapEvent = true; 
+      _; 
+      inSwapEvent = false; 
     }
 
     constructor(address _stakingContract, address _teamWallet) ERC20("Degenator", "DGN", 18) Owned(msg.sender) {
@@ -53,23 +59,28 @@ contract Degenator is ERC20, Owned {
         stakingContract = _stakingContract;
         teamWallet = _teamWallet;
         tokenPair = uniswapFactory.createPair(address(this), WETH);
+
     }
-    
-    //TODO come back to this
+
     function initialize() external onlyOwner {
         IERC20(address(this)).approve(address(uniswapRouter), type(uint256).max);
         isTaxOn = true;
         whaleProtectionPeriod = true;
     }
-
+    
+    //@param to -- tokens to be minted to this address
+    //@param amount -- amount of tokens to be minted
     function mint(address to, uint256 amount) external onlyStaking {
         _mint(to, amount);
     }
-
+    
+    //@param from -- tokens burned from this address
+    //@param amount -- amount of tokens to be burned from 'from' address
     function burn(address from, uint256 amount) external onlyStaking {
         _burn(from, amount);
     }
-
+    
+    //@param pause -- pause or reinstate trading
     function pauseTrading(bool pause) external onlyOwner {
         tradingPaused = pause;
         emit TradingPaused(pause, block.timestamp);
@@ -92,7 +103,7 @@ contract Degenator is ERC20, Owned {
         isTaxOn = value;
         emit ToggleTax(value);
     }
-    
+
     //TODO come back to this
     function toggleWhaleProtection(bool value) external onlyOwner {
         whaleProtectionPeriod = value;
@@ -115,69 +126,32 @@ contract Degenator is ERC20, Owned {
     function _addTax(uint256 amount) internal view returns (uint256) {
         return (amount * TAX_AMOUNT) / 100;
     }
-    
-    //TODO come back to this and fix, UniswapV2 callback issue 
-    function _swapAndPayOut() internal {
-        //avoids weird recursion loop
-        isTaxOn = false;
 
+    //TODO come back to this and fix, UniswapV2 callback issue
+    function _swapAndPayOut() internal swapEvent {
         address[] memory path = new address[](2);
         path[0] = address(this);
         path[1] = WETH;
-
-        //we don't care about slippage here since there might be very low liquidity, and
-        //we still want the sale to succeed no matter what
+        
+        //we don't care about slippage here
         uniswapRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
             balanceOf[address(this)], 0, path, teamWallet, block.timestamp
         );
-
-        //tax back on after swap
-        isTaxOn = true;
     }
-    
-    //TODO fix this as well
-    function transfer(address to, uint256 amount) public virtual override returns (bool) {
-        if (whaleProtectionPeriod == true && amount >= MAX_TRANSFER_AMOUNT) {
-            revert WhaleProtectionActive();
-        }
 
-        if (balanceOf[address(this)] >= TAX_POT_MAX && isTaxOn) {
+    function _transfer(address from, address to, uint256 amount) public returns (bool) {
+        //if (whaleProtectionPeriod == true && amount >= MAX_TRANSFER_AMOUNT) {
+        //    revert WhaleProtectionActive();
+        //}
+        
+        if (tradingPaused) revert TradingIsPaused(); 
+        
+        if (balanceOf[address(this)] >= TAX_POT_MAX && 
+            isTaxOn && 
+            from != tokenPair &&
+            !inSwapEvent) {
             _swapAndPayOut();
         }
-
-        balanceOf[msg.sender] -= amount;
-
-        // Cannot overflow because the sum of all user
-        // balances can't exceed the max uint256 value.
-        if (msg.sender == owner || msg.sender == address(this) || msg.sender == stakingContract) {
-            unchecked {
-                balanceOf[to] += amount;
-            }
-        } else {
-            unchecked {
-                balanceOf[to] += amount - _addTax(amount);
-                balanceOf[address(this)] += _addTax(amount);
-            }
-        }
-
-        emit Transfer(msg.sender, to, amount - _addTax(amount));
-        emit Tax(msg.sender, _addTax(amount));
-
-        return true;
-    }
-    
-    //TODO: fix this as well
-    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
-        if (whaleProtectionPeriod == true && amount >= MAX_TRANSFER_AMOUNT) {
-            revert WhaleProtectionActive();
-        }
-
-        if (balanceOf[address(this)] >= TAX_POT_MAX && isTaxOn) {
-            _swapAndPayOut();
-        }
-        uint256 allowed = allowance[from][msg.sender]; // Saves gas for limited approvals.
-
-        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
 
         balanceOf[from] -= amount;
 
@@ -194,9 +168,21 @@ contract Degenator is ERC20, Owned {
             }
         }
 
+        isTaxOn = true;  
+
         emit Transfer(from, to, amount - _addTax(amount));
         emit Tax(from, _addTax(amount));
-
+        
         return true;
+    }
+
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
+      bool success = _transfer(msg.sender, to, amount); 
+      return success; 
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+        bool success = _transfer(from, to, amount); 
+        return success; 
     }
 }
