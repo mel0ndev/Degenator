@@ -28,7 +28,7 @@ contract DegenStakingTest is Test {
         deal(address(degenator), alice, 500_000_000e18);
     }
 
-    function testTiersSetup() public {
+    function testTiersSetup() public view {
         //pleb
         (uint256 stakingDuration, uint256 apy, uint256 bonus, uint256 unstakeDuration) = staking.tiers(0);  
 
@@ -40,32 +40,32 @@ contract DegenStakingTest is Test {
         (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(1);  
 
         assertEq(stakingDuration, 1 days); 
-        assertEq(apy, 200); 
-        assertEq(bonus, 10); 
+        assertEq(apy, 2e18); 
+        assertEq(bonus, 1e17); 
         assertEq(unstakeDuration, 12 hours); 
         
         //chad
         (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(2);  
 
         assertEq(stakingDuration, 3 days); 
-        assertEq(apy, 300); 
-        assertEq(bonus, 90); 
+        assertEq(apy, 3e18); 
+        assertEq(bonus, 9e17); 
         assertEq(unstakeDuration, 24 hours); 
         
         //patron
         (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(3);  
 
         assertEq(stakingDuration, 7 days); 
-        assertEq(apy, 700); 
-        assertEq(bonus, 420); 
+        assertEq(apy, 7e18); 
+        assertEq(bonus, 42e17); 
         assertEq(unstakeDuration, 36 hours); 
         
         //degenator
         (stakingDuration, apy, bonus, unstakeDuration) = staking.tiers(4);  
 
         assertEq(stakingDuration, 14 days); 
-        assertEq(apy, 1400); 
-        assertEq(bonus, 1680); 
+        assertEq(apy, 14e18); 
+        assertEq(bonus, 168e17); 
         assertEq(unstakeDuration, 48 hours); 
     }
 
@@ -106,6 +106,46 @@ contract DegenStakingTest is Test {
 
         vm.prank(alice); 
         uint256 returned = staking.claim(0); 
+        console2.log("amount returned", returned); 
+    }
+
+    function testStakeRookie(uint96 amount) public {
+        vm.assume(amount > 1e18); 
+        vm.assume(amount <= degenator.balanceOf(alice)); 
+
+        vm.prank(alice); 
+        staking.stake(amount, 1);  
+        
+        (uint256 deposited, uint256 startTime, uint256 endTime) = staking.stakingBalances(alice, 1); 
+
+        assertEq(deposited, amount - (amount * degenator.TAX_AMOUNT()) / 100); 
+        assertEq(startTime, block.timestamp); 
+        assertEq(endTime, 0); 
+
+        (deposited, startTime, endTime) = staking.stakingBalances(alice, 2); 
+        assertEq(deposited, 0); 
+        assertEq(startTime, 0); 
+        assertEq(endTime, 0); 
+    }
+
+    function testUnstakeRookie() public {
+        testStakeRookie(100e18); 
+        
+        skip(3 days); 
+        
+        vm.prank(alice); 
+        staking.unstake(1); 
+        (, , uint256 endTime) = staking.stakingBalances(alice, 1); 
+        assertEq(endTime, block.timestamp); 
+    }
+
+    function testClaimRookie() public {
+        testUnstakeRookie(); 
+
+        skip(12 hours); 
+
+        vm.prank(alice); 
+        uint256 returned = staking.claim(1); 
         console2.log("amount returned", returned); 
     }
 

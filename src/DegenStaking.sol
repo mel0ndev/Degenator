@@ -28,6 +28,7 @@ contract DegenStaking is Owned, Test {
     }
 
     uint256 internal constant DENOMINATOR = 1e19; 
+    uint256 internal constant YEAR = 60 * 60 * 24 * 365; 
 
     mapping(address user => mapping(uint256 pid => StakingBalance)) public stakingBalances; //user can have a per pid staking balance
     mapping(uint256 pid => StakingTier) public tiers; 
@@ -56,32 +57,32 @@ contract DegenStaking is Owned, Test {
         //rookie
         tiers[1] = StakingTier({
             stakingDuration: 1 days, 
-            apy: 200, //20%
-            bonus: 10, //1% 
+            apy: 2e18, //20%
+            bonus: 1e17, //1% 
             unstakeDuration: 12 hours
         }); 
         
         //chad 
         tiers[2] = StakingTier({
             stakingDuration: 3 days, 
-            apy: 300, //30%
-            bonus: 90, //9% 
+            apy: 3e18, //30%
+            bonus: 9e17, //9% 
             unstakeDuration: 24 hours
         }); 
         
         //patron
         tiers[3] = StakingTier({
             stakingDuration: 7 days, 
-            apy: 700, //70%
-            bonus: 420, //42% 
+            apy: 7e18, //70%
+            bonus: 42e17, //42% 
             unstakeDuration: 36 hours
         }); 
 
         //degenator
         tiers[4] = StakingTier({
             stakingDuration: 14 days, 
-            apy: 1400, //140%
-            bonus: 1680, //168% 
+            apy: 14e18, //140%
+            bonus: 168e17, //168% 
             unstakeDuration: 48 hours
         }); 
     }
@@ -166,7 +167,6 @@ contract DegenStaking is Owned, Test {
         uint256 timeStaked = (end - stakingBalances[user][pid].stakeStart);
         uint256 startingBalance = stakingBalances[user][pid].deposited;
 
-        //uint256 daysStaked = timeStaked / 1 days;
         uint256 hoursStaked = timeStaked / 1 hours;
 
         console2.log("hours staked", hoursStaked); 
@@ -179,26 +179,43 @@ contract DegenStaking is Owned, Test {
      * @notice gets the amount to be withdrawn for the user based on their tier and staking time
      * @param amount - the initial staking deposit amount of the user
      * @param timeStaked - the time spend staked in the pool
-     * @param pid - the pool id (tier) we're calculating returns for
+     * @param pid - the pool id (tier) we are calculating returns for
      * @return the total amount to be withdrawn, inclusive of initial deposit amount
      */ 
     function _getWithdrawAmount(uint256 amount, uint256 timeStaked, uint256 pid) internal view returns (uint256) {
         StakingTier memory tierInfo = tiers[pid];     
-        uint256 rewardPerSecond = amount * tierInfo.apy / 365 / 24 / 60 / 60 / DENOMINATOR;  
-
+        uint256 rewardPerSecond = _getRewardPerSecond(amount, tierInfo); 
+        console2.log("reward per second", rewardPerSecond); 
         uint256 totalRewards = amount + (rewardPerSecond * timeStaked); 
-        console2.log(totalRewards); 
-        if (tierInfo.stakingDuration == 0) {
-            return totalRewards; 
-        }
+        console2.log("total rewards", totalRewards); 
 
+        if (tierInfo.stakingDuration == 0) return totalRewards; 
+        
         //get the amount of round trips the user has completed 
         //round trip = times completed the stakingTime to earn a bonus
         //a stakingTime of 1 day would mean that for every complete day spent staking == 1 round trip
-        uint256 hoursStaked = timeStaked / 1 hours;
-        uint256 roundTrips = hoursStaked / tierInfo.stakingDuration; //for bonus payouts 
-        console2.log(roundTrips); 
+        uint256 daysStaked = timeStaked / 1 days; 
+        uint256 roundTrips = daysStaked / (tierInfo.stakingDuration / 1 days); //for bonus payouts 
+        console2.log("round trips", roundTrips); 
+        if (roundTrips == 0) return totalRewards; 
+        
+        //get amount before 1 round trip
+        uint256 finalAmount = amount + _getRewardPerSecond(amount, tierInfo) * tierInfo.stakingDuration; 
 
-        //uint256 bonusTokens = 
+        for (uint256 i = 0; i < roundTrips;) {
+            finalAmount += (finalAmount * tierInfo.bonus / DENOMINATOR); 
+
+            if (roundTrips == 1) break; 
+
+            finalAmount += _getRewardPerSecond(finalAmount, tierInfo) * tierInfo.stakingDuration; 
+            unchecked { i++; }
+        }
+        
+        return finalAmount; 
+    }
+
+    function _getRewardPerSecond(uint256 amount, StakingTier memory tierInfo) internal view returns (uint256) {
+        uint256 rewardPerSecond = amount * tierInfo.apy / YEAR / DENOMINATOR;  
+        return rewardPerSecond; 
     }
 }
