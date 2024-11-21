@@ -2,9 +2,10 @@
 pragma solidity ^0.8.13;
 
 import {Test, console2} from "forge-std/Test.sol";
-import {Degenator} from "../src/Degenator.sol";
+import {Degenator} from "src/Degenator.sol";
 import {IERC20} from "forge-std/interfaces/IERC20.sol";
-import {IUniswapV2Router02} from "../src/interfaces/IUniswapV2Router02.sol";
+import {IUniswapV2Router02} from "src/interfaces/IUniswapV2Router02.sol";
+import {IUniswapV2Factory} from "src/interfaces/IUniswapV2Factory.sol";
 
 contract DegenatorTest is Test {
     Degenator degenator;
@@ -15,10 +16,21 @@ contract DegenatorTest is Test {
 
     address immutable WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     IUniswapV2Router02 immutable uniswapRouter = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+    IUniswapV2Factory immutable uniswapFactory = IUniswapV2Factory(0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f); 
+
     address owner;
 
     function setUp() public {
-        degenator = new Degenator(address(1), address(this));
+        degenator = new Degenator(
+            address(1), 
+            address(2), 
+            address(this),
+            address(uniswapFactory), 
+            address(uniswapRouter),
+            WETH, 
+            "Bozo",
+            "BOZO"
+        );
         deal(WETH, address(this), 1e18);
         owner = degenator.owner();
         deal(address(degenator), alice, 500_000_000e18);
@@ -227,7 +239,6 @@ contract DegenatorTest is Test {
 
     //no way to tax amounts under 10, but users are losing money to gas, so it's not profitable for them to do so
     function testTransfer(uint96 amount) external {
-        degenator.toggleWhaleProtection(false);
         uint256 aliceBalance = degenator.balanceOf(alice);
         uint256 tax = degenator.TAX_AMOUNT();
         deal(address(degenator), alice, amount);
@@ -271,7 +282,6 @@ contract DegenatorTest is Test {
     function testTransferFrom(uint96 amount) external {
         uint256 contractBal = degenator.balanceOf(address(this));
         vm.prank(degenator.owner());
-        degenator.toggleWhaleProtection(false);
 
         vm.assume(amount <= contractBal);
         uint256 degenatorBalanceBefore = degenator.balanceOf(address(degenator));

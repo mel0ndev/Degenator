@@ -10,41 +10,40 @@ import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
 contract Degenator is ERC20, Owned {
     uint256 public TAX_AMOUNT = 5;
     uint256 public TAX_POT_MAX = 500_000e18;
-    uint256 public MAX_TRANSFER_AMOUNT = 1_000_000_000e18 * 2 / 10; //TODO: come back to this
 
-    IUniswapV2Factory immutable uniswapFactory = IUniswapV2Factory(0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f);
-    IUniswapV2Router02 immutable uniswapRouter = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
-    //testnet
-    //IUniswapV2Factory immutable uniswapFactory = IUniswapV2Factory(0x7E0987E5b3a30e3f2828572Bb659A548460a3003);
-    //IUniswapV2Router02 immutable uniswapRouter = IUniswapV2Router02(0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008);
+    uint256 public MAX_TX_AMOUNT = 10_000_000e18; 
 
-    address immutable WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
-    //sepolia weth
-    //address immutable WETH = 0xf531B8F309Be94191af87605CfBf600D71C2cFe0;
+    mapping(address => bool) internal whitelist; 
+
+    IUniswapV2Factory immutable uniswapFactory;
+    IUniswapV2Router02 immutable uniswapRouter;
+    address internal immutable WETH; 
 
     address public tokenPair;
     address public stakingContract;
+    address public legendaryStakingContract; 
     address internal teamWallet;
 
     bool public tradingPaused = false;
-    bool public whaleProtectionPeriod = false;
     //@dev bool to control taxing during trasfers for dex swaps
     bool public isTaxOn = false;
     bool internal inSwapEvent = false; 
 
     error TaxTooHigh();
-    error WhaleProtectionActive();
+    error AboveMaximumTxnAmount(); 
     error TradingIsPaused(); 
 
     event TaxAmountChanged(uint256 newTaxAmount);
     event TradingPaused(bool, uint256 block);
     event Tax(address indexed sender, uint256 taxAmount);
     event MaxPotChanged(uint256 newPotMax);
+    event MaxTxnAmountChanged(uint256 newTxnAmount); 
     event ToggleTax(bool);
     event ChangePayout(address indexed newWallet);
+    event Whitelisted(address indexed user); 
 
     modifier onlyStaking() virtual {
-        require(msg.sender == stakingContract, "UNAUTHORIZED");
+        require(msg.sender == stakingContract || msg.sender == legendaryStakingContract, "UNAUTHORIZED");
         _;
     }
 
@@ -54,18 +53,35 @@ contract Degenator is ERC20, Owned {
       inSwapEvent = false; 
     }
 
-    constructor(address _stakingContract, address _teamWallet) ERC20("Degenator", "DGN", 18) Owned(msg.sender) {
+    constructor(
+        address _stakingContract, 
+        address _legendaryStakingContract, 
+        address _teamWallet, 
+        address _factory,
+        address _router,
+        address _weth,
+        string memory _name, 
+        string memory _symbol) 
+    ERC20(_name, _symbol, 18) Owned(msg.sender) {
         _mint(owner, 1_000_000_000e18);
+
         stakingContract = _stakingContract;
+        legendaryStakingContract = _legendaryStakingContract; 
         teamWallet = _teamWallet;
+
+        uniswapFactory = IUniswapV2Factory(_factory); 
+        uniswapRouter = IUniswapV2Router02(_router); 
+        WETH = _weth; 
+
         tokenPair = uniswapFactory.createPair(address(this), WETH);
 
+        whitelist[teamWallet] = true; 
+        whitelist[tokenPair] = true; 
     }
 
     function initialize() external onlyOwner {
         IERC20(address(this)).approve(address(uniswapRouter), type(uint256).max);
         isTaxOn = true;
-        whaleProtectionPeriod = true;
     }
     
     //@param to -- tokens to be minted to this address
@@ -99,19 +115,24 @@ contract Degenator is ERC20, Owned {
         emit MaxPotChanged(newPotMax);
     }
 
+    function changeMaxTxn(uint256 newTxnAmount) external onlyOwner {
+        MAX_TX_AMOUNT = newTxnAmount; 
+        emit MaxTxnAmountChanged(newTxnAmount); 
+    }
+
     function toggleTax(bool value) external onlyOwner {
         isTaxOn = value;
         emit ToggleTax(value);
     }
 
-    //TODO come back to this
-    function toggleWhaleProtection(bool value) external onlyOwner {
-        whaleProtectionPeriod = value;
-    }
-
     function setTeamWallet(address wallet) external onlyOwner {
         teamWallet = wallet;
         emit ChangePayout(wallet);
+    }
+
+    function addWhitelist(address user) external onlyOwner {
+        whitelist[user] = true; 
+        emit Whitelisted(user); 
     }
 
     //@dev in case something goes wrong and we end up with a different liquidity token address(this shouldn't happen but just in case)
@@ -123,11 +144,14 @@ contract Degenator is ERC20, Owned {
         stakingContract = newStakingContract;
     }
 
+    function updateLegendaryStakingContract(address newLegendaryStaking) external onlyOwner {
+        legendaryStakingContract = newLegendaryStaking; 
+    }
+
     function _addTax(uint256 amount) internal view returns (uint256) {
         return (amount * TAX_AMOUNT) / 100;
     }
 
-    //TODO come back to this and fix, UniswapV2 callback issue
     function _swapAndPayOut() internal swapEvent {
         address[] memory path = new address[](2);
         path[0] = address(this);
@@ -140,11 +164,11 @@ contract Degenator is ERC20, Owned {
     }
 
     function _transfer(address from, address to, uint256 amount) public returns (bool) {
-        //if (whaleProtectionPeriod == true && amount >= MAX_TRANSFER_AMOUNT) {
-        //    revert WhaleProtectionActive();
-        //}
-        
         if (tradingPaused) revert TradingIsPaused(); 
+         
+        if (!whitelist[from]) {
+            if (amount > MAX_TX_AMOUNT) revert AboveMaximumTxnAmount(); 
+        }
         
         if (balanceOf[address(this)] >= TAX_POT_MAX && 
             isTaxOn && 
@@ -167,8 +191,6 @@ contract Degenator is ERC20, Owned {
                 balanceOf[address(this)] += _addTax(amount);
             }
         }
-
-        isTaxOn = true;  
 
         emit Transfer(from, to, amount - _addTax(amount));
         emit Tax(from, _addTax(amount));

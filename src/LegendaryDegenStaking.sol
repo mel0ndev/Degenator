@@ -4,13 +4,18 @@ import {ERC20} from "solmate/tokens/ERC20.sol";
 import {Owned} from "solmate/auth/Owned.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {Degenator} from "./Degenator.sol";
+import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol"; 
+import {IUniswapV2Router01} from "./interfaces/IUniswapV2Router01.sol"; 
+import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol"; 
 
-import "forge-std/Test.sol"; 
+//TODO remove
+import {Test, console2} from "forge-std/Test.sol";
 
-contract DegenStaking is Owned, Test {
+contract LegendaryDegenStaking is Owned, Test {
     using SafeTransferLib for ERC20;
-
-    Degenator public degenator;
+    
+    Degenator public degenator; 
+    address public degenatorLP;
 
     struct StakingBalance {
         uint256 deposited;
@@ -24,6 +29,9 @@ contract DegenStaking is Owned, Test {
         uint256 bonus; 
         uint256 unstakeDuration; 
     }
+
+    address public immutable WETH; 
+    IUniswapV2Router02 public immutable uniswapRouter; 
 
     uint256 internal constant DENOMINATOR = 1e19; 
     uint256 internal constant YEAR = 60 * 60 * 24 * 365; 
@@ -40,48 +48,18 @@ contract DegenStaking is Owned, Test {
 	error PeriodStillActive(); 
 	error PeriodAlreadyStarted(); 
 
-    constructor(Degenator _degenator) Owned(msg.sender) {
+    constructor(Degenator _degenator, address _degenatorLP, address _router, address _weth) Owned(msg.sender) {
         degenator = _degenator; 
-
+        degenatorLP = _degenatorLP; 
+        uniswapRouter = IUniswapV2Router02(_router); 
+        WETH = _weth; 
         //initialize staking tiers
-        //pleb tier
+        //legendary degenator tier
         tiers[0] = StakingTier({
-            stakingDuration: 0, 
-            apy: 1e18, //10%
-            bonus: 0,  
-            unstakeDuration: 4 hours
-        }); 
-        
-        //rookie
-        tiers[1] = StakingTier({
-            stakingDuration: 1 days, 
-            apy: 2e18, //20%
-            bonus: 1e16, //0.1% 
-            unstakeDuration: 12 hours
-        }); 
-        
-        //chad 
-        tiers[2] = StakingTier({
-            stakingDuration: 3 days, 
-            apy: 3e18, //30%
-            bonus: 9e17, //9% 
-            unstakeDuration: 24 hours
-        }); 
-        
-        //patron
-        tiers[3] = StakingTier({
-            stakingDuration: 7 days, 
-            apy: 7e18, //70%
-            bonus: 42e17, //42% 
-            unstakeDuration: 36 hours
-        }); 
-
-        //degenator
-        tiers[4] = StakingTier({
-            stakingDuration: 14 days, 
-            apy: 14e18, //140%
-            bonus: 168e17, //168% 
-            unstakeDuration: 48 hours
+            stakingDuration: 30 days, 
+            apy: 300e17, //300%
+            bonus: 900e17, //900%
+            unstakeDuration: 60 hours
         }); 
     }
 
@@ -94,17 +72,18 @@ contract DegenStaking is Owned, Test {
         if (amount == 0) revert ZeroAmount();
 		if (stakingBalances[msg.sender][pid].stakeEnd != 0) revert PeriodStillActive(); 
 		
+        ERC20(address(degenatorLP)).safeTransferFrom(msg.sender, address(this), amount);
+        
+        uint256 amount0 = getUnderlyingAmounts(amount); 
+        //uint256 degenatorAmount = token0 == address(degenator) ? amount0 : amount1; 
 
-        ERC20(address(degenator)).safeTransferFrom(msg.sender, address(this), amount);
-        //account for tax
-        amount -= (amount * degenator.TAX_AMOUNT()) / 100;
-        stakingBalances[msg.sender][pid].deposited += amount;
+        stakingBalances[msg.sender][pid].deposited += amount0;
 
         //redepositing more will reset your staking time, this is desired behavior
         stakingBalances[msg.sender][pid].stakeStart = block.timestamp;
         stakingBalances[msg.sender][pid].stakeEnd = 0;
 
-        emit Staked(msg.sender, amount, block.timestamp);
+        emit Staked(msg.sender, amount0, block.timestamp);
     }
 
     /* 
@@ -133,17 +112,16 @@ contract DegenStaking is Owned, Test {
 			revert PeriodNotFinished(); 
 		}
 
-        uint256 amountToWithdraw = multiplyStakingBalance(msg.sender, pid);
-
-        //burn the user's deposit since we are minting new coins
-        degenator.burn(address(this), user.deposited);
+        uint256 amountToWithdraw = multiplyStakingBalance(msg.sender, pid) - user.deposited;
 
         user.deposited = 0;
         user.stakeStart = 0;
         user.stakeEnd = 0;
 
-        //mint the entire amount on unstake
+        //mint the entire amount on unstake minus deposit amount because it is lp token
         degenator.mint(msg.sender, amountToWithdraw);
+        //send the user's lp back to them
+        ERC20(degenatorLP).safeTransfer(msg.sender, user.deposited);
 
         emit Claim(msg.sender, amountToWithdraw, block.timestamp);
 
@@ -165,7 +143,12 @@ contract DegenStaking is Owned, Test {
         uint256 timeStaked = (end - stakingBalances[user][pid].stakeStart);
         uint256 startingBalance = stakingBalances[user][pid].deposited;
 
-        return _getWithdrawAmount(startingBalance, timeStaked, pid); 
+        uint256 hoursStaked = timeStaked / 1 hours;
+
+        console2.log("hours staked", hoursStaked); 
+        
+        uint256 a = _getWithdrawAmount(startingBalance, timeStaked, pid); 
+        return a; 
     }
     
     /**
@@ -178,7 +161,9 @@ contract DegenStaking is Owned, Test {
     function _getWithdrawAmount(uint256 amount, uint256 timeStaked, uint256 pid) internal view returns (uint256) {
         StakingTier memory tierInfo = tiers[pid];     
         uint256 rewardPerSecond = _getRewardPerSecond(amount, tierInfo); 
+        console2.log("reward per second", rewardPerSecond); 
         uint256 totalRewards = amount + (rewardPerSecond * timeStaked); 
+        console2.log("total rewards", totalRewards); 
 
         if (tierInfo.stakingDuration == 0) return totalRewards; 
         
@@ -187,13 +172,16 @@ contract DegenStaking is Owned, Test {
         //a stakingTime of 1 day would mean that for every complete day spent staking == 1 round trip
         uint256 daysStaked = timeStaked / 1 days; 
         uint256 roundTrips = daysStaked / (tierInfo.stakingDuration / 1 days); //for bonus payouts 
+        console2.log("round trips", roundTrips); 
         if (roundTrips == 0) return totalRewards; 
 
         //for initial trip
         uint256 finalAmount = amount + _getRewardPerSecond(amount, tierInfo) * tierInfo.stakingDuration; 
+        //uint256 finalAmount = totalRewards; 
+        console2.log("starting amount + rewards", finalAmount); 
 
         for (uint256 i = 0; i < roundTrips;) {
-            finalAmount += (finalAmount * tierInfo.bonus) / DENOMINATOR; 
+            finalAmount += (finalAmount * tierInfo.bonus / DENOMINATOR); 
 
             if (roundTrips == 1) break; 
 
@@ -204,20 +192,30 @@ contract DegenStaking is Owned, Test {
         }
 
         uint256 leftoverSeconds = timeStaked - (daysStaked * 1 days); 
+        console2.log("leftover seconds", leftoverSeconds); 
         finalAmount += _getRewardPerSecond(finalAmount, tierInfo) * leftoverSeconds;  
         
         return finalAmount; 
     }
-    
-    ////////// HELPER FUNCTIONS ////////// 
 
-    function earned(address user, uint256 pid) external view returns (uint256) {
-        return multiplyStakingBalance(user, pid); 
-    }
-
-    function _getRewardPerSecond(uint256 amount, StakingTier memory tierInfo) internal view returns (uint256) {
+    function _getRewardPerSecond(uint256 amount, StakingTier memory tierInfo) internal pure returns (uint256) {
         uint256 rewardPerSecond = amount * tierInfo.apy / YEAR / DENOMINATOR;  
         return rewardPerSecond; 
     }
 
+    function getUnderlyingAmounts(uint256 amount) internal view returns (uint256) {
+        IUniswapV2Pair pair = IUniswapV2Pair(degenatorLP);
+        address token0 = pair.token0(); 
+
+        (uint112 reserve0, uint112 reserve1, ) = pair.getReserves();
+
+        uint256 totalLP = pair.totalSupply();
+
+        uint256 userDegenatorAmount = token0 == address(degenator) ? (amount * reserve0) / totalLP : (amount * reserve1) / totalLP; 
+        return userDegenatorAmount;     
+    }
+
+    function earned(address user, uint256 pid) external view returns (uint256) {
+        return multiplyStakingBalance(user, pid); 
+    }
 }
