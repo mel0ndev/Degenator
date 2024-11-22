@@ -8,10 +8,7 @@ import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
 import {IUniswapV2Router01} from "./interfaces/IUniswapV2Router01.sol"; 
 import {IUniswapV2Pair} from "./interfaces/IUniswapV2Pair.sol"; 
 
-//TODO remove
-import {Test, console2} from "forge-std/Test.sol";
-
-contract LegendaryDegenStaking is Owned, Test {
+contract LegendaryDegenStaking is Owned {
     using SafeTransferLib for ERC20;
     
     Degenator public degenator; 
@@ -19,6 +16,7 @@ contract LegendaryDegenStaking is Owned, Test {
 
     struct StakingBalance {
         uint256 deposited;
+        uint256 lpAmount; 
         uint256 stakeStart;
         uint256 stakeEnd;
     }
@@ -75,9 +73,9 @@ contract LegendaryDegenStaking is Owned, Test {
         ERC20(address(degenatorLP)).safeTransferFrom(msg.sender, address(this), amount);
         
         uint256 amount0 = getUnderlyingAmounts(amount); 
-        //uint256 degenatorAmount = token0 == address(degenator) ? amount0 : amount1; 
 
         stakingBalances[msg.sender][pid].deposited += amount0;
+        stakingBalances[msg.sender][pid].lpAmount += amount; 
 
         //redepositing more will reset your staking time, this is desired behavior
         stakingBalances[msg.sender][pid].stakeStart = block.timestamp;
@@ -121,7 +119,7 @@ contract LegendaryDegenStaking is Owned, Test {
         //mint the entire amount on unstake minus deposit amount because it is lp token
         degenator.mint(msg.sender, amountToWithdraw);
         //send the user's lp back to them
-        ERC20(degenatorLP).safeTransfer(msg.sender, user.deposited);
+        ERC20(degenatorLP).safeTransfer(msg.sender, user.lpAmount);
 
         emit Claim(msg.sender, amountToWithdraw, block.timestamp);
 
@@ -145,7 +143,6 @@ contract LegendaryDegenStaking is Owned, Test {
 
         uint256 hoursStaked = timeStaked / 1 hours;
 
-        console2.log("hours staked", hoursStaked); 
         
         uint256 a = _getWithdrawAmount(startingBalance, timeStaked, pid); 
         return a; 
@@ -161,9 +158,7 @@ contract LegendaryDegenStaking is Owned, Test {
     function _getWithdrawAmount(uint256 amount, uint256 timeStaked, uint256 pid) internal view returns (uint256) {
         StakingTier memory tierInfo = tiers[pid];     
         uint256 rewardPerSecond = _getRewardPerSecond(amount, tierInfo); 
-        console2.log("reward per second", rewardPerSecond); 
         uint256 totalRewards = amount + (rewardPerSecond * timeStaked); 
-        console2.log("total rewards", totalRewards); 
 
         if (tierInfo.stakingDuration == 0) return totalRewards; 
         
@@ -172,13 +167,11 @@ contract LegendaryDegenStaking is Owned, Test {
         //a stakingTime of 1 day would mean that for every complete day spent staking == 1 round trip
         uint256 daysStaked = timeStaked / 1 days; 
         uint256 roundTrips = daysStaked / (tierInfo.stakingDuration / 1 days); //for bonus payouts 
-        console2.log("round trips", roundTrips); 
         if (roundTrips == 0) return totalRewards; 
 
         //for initial trip
         uint256 finalAmount = amount + _getRewardPerSecond(amount, tierInfo) * tierInfo.stakingDuration; 
         //uint256 finalAmount = totalRewards; 
-        console2.log("starting amount + rewards", finalAmount); 
 
         for (uint256 i = 0; i < roundTrips;) {
             finalAmount += (finalAmount * tierInfo.bonus / DENOMINATOR); 
@@ -192,7 +185,6 @@ contract LegendaryDegenStaking is Owned, Test {
         }
 
         uint256 leftoverSeconds = timeStaked - (daysStaked * 1 days); 
-        console2.log("leftover seconds", leftoverSeconds); 
         finalAmount += _getRewardPerSecond(finalAmount, tierInfo) * leftoverSeconds;  
         
         return finalAmount; 

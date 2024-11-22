@@ -247,9 +247,9 @@ contract DegenStakingTest is Test {
         legendaryStaking.stake(balance, 0); 
         vm.stopPrank(); 
 
-        (uint256 deposited, uint256 startTime, uint256 endTime) = legendaryStaking.stakingBalances(alice, 0); 
+        (uint256 deposited, uint256 lpAmount, uint256 startTime, uint256 endTime) = legendaryStaking.stakingBalances(alice, 0); 
 
-        console2.log("LP deposited", deposited); 
+        console2.log("LP deposited", lpAmount); 
         
         uint256 balanceOfStakingContract = IERC20(lp).balanceOf(address(legendaryStaking)); 
         console2.log("STAKING CONTRACT BALANCE", balanceOfStakingContract); 
@@ -266,7 +266,7 @@ contract DegenStakingTest is Test {
         
         vm.prank(alice); 
         legendaryStaking.unstake(0); 
-        (, , uint256 endTime) = legendaryStaking.stakingBalances(alice, 0); 
+        (, , , uint256 endTime) = legendaryStaking.stakingBalances(alice, 0); 
         assertEq(endTime, block.timestamp); 
     }
 

@@ -226,8 +226,6 @@ contract EndToEndTest is Test {
         
         uint256 aliceBalance = degenator.balanceOf(alice); 
 
-        console.log("DEGENATOR BALANCE", aliceBalance); 
-
         //now alice can add liquidity herself
         deal(WETH, alice, 0.05e18); 
         vm.startPrank(alice);  
@@ -246,9 +244,11 @@ contract EndToEndTest is Test {
 
         uint256 aliceLpBalance = IERC20(lp).balanceOf(alice); 
 
-        console.log("LP BALANCE:", aliceLpBalance); 
         legendaryStaking.stake(aliceLpBalance, 0); 
         vm.stopPrank(); 
+
+        //check alice's staking balance
+        (uint256 amount, uint256 start, uint256 end, ) = legendaryStaking.stakingBalances(alice, 0); 
         
         //we go a week into the future and check rewards 
         skip(1 weeks); 
@@ -256,57 +256,127 @@ contract EndToEndTest is Test {
         uint256 aliceEarned0 = legendaryStaking.earned(alice, 0); 
         assertGt(aliceEarned0, 0); 
         ////our second week to apply boost
-        //skip(1 weeks); 
+        skip(23 days); 
 
-        //uint256 aliceEarned1 = staking.earned(alice, 4); 
-        //assertGt(aliceEarned1, aliceEarned0);  
+        uint256 aliceEarned1 = legendaryStaking.earned(alice, 0); 
+        assertGt(aliceEarned1, aliceEarned0);  
     
         ////now alice wants to unstake     
-        //vm.startPrank(alice); 
-        //vm.expectRevert(); 
-        //staking.claim(4); 
+        vm.startPrank(alice); 
+        vm.expectRevert(); 
+        legendaryStaking.claim(0); 
 
-        //staking.unstake(4); 
+        legendaryStaking.unstake(0); 
 
-        //vm.stopPrank(); 
-        //
-        //(, , uint256 stakeEnd)  = staking.stakingBalances(alice, 4); 
-        //assertEq(stakeEnd, block.timestamp); 
-        //
-        ////try to claim without waiting the full unstake period
-        //vm.startPrank(alice); 
-        //vm.expectRevert(); 
-        //staking.claim(4);
-        //
-        ////wait a bit but not the full time    
-        //skip(30 hours);  
+        vm.stopPrank(); 
+        
+        (, , , uint256 stakeEnd)  = legendaryStaking.stakingBalances(alice, 0); 
+        assertEq(stakeEnd, block.timestamp); 
+        
+        //try to claim without waiting the full unstake period
+        vm.startPrank(alice); 
+        vm.expectRevert(); 
+        legendaryStaking.claim(0);
+        
+        //wait a bit but not the full time    
+        skip(30 hours);  
 
-        //vm.expectRevert(); 
-        //staking.claim(4);
+        vm.expectRevert(); 
+        legendaryStaking.claim(0);
 
-        //skip(18 hours); 
-        //staking.claim(4);
-        //vm.stopPrank(); 
-        //
-        //aliceBalance = degenator.balanceOf(alice);  
-        //assertGt(aliceBalance, 0); 
-        //
-        //vm.startPrank(alice); 
-        //degenator.approve(address(uniswapRouter), aliceBalance); 
-        ////now she wants to sell her tokens
-        //path[0] = address(degenator);  
-        //path[1] = WETH; 
-        //uniswapRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
-        //    aliceBalance,
-        //    0, 
-        //    path, 
-        //    alice, 
-        //    block.timestamp + 1
-        //); 
+        skip(35 hours); 
+        legendaryStaking.claim(0);
+        vm.stopPrank(); 
+        
+        aliceBalance = degenator.balanceOf(alice);  
+        aliceLpBalance = IERC20(lp).balanceOf(alice); 
+        assertGt(aliceBalance, 0); 
+        assertGt(aliceLpBalance, 0); 
 
-        //vm.stopPrank(); 
-        //
-        //uint256 aliceWETH = IERC20(WETH).balanceOf(alice); 
-        //assertGt(aliceWETH, 0); 
+        //turn off max tx amount (this would be way after sniper prevention)
+        degenator.changeMaxTxn(type(uint256).max - 1); 
+        
+        vm.startPrank(alice); 
+        degenator.approve(address(uniswapRouter), aliceBalance); 
+        IERC20(lp).approve(address(uniswapRouter), aliceLpBalance); 
+        uniswapRouter.removeLiquidity(
+            address(degenator), 
+            WETH,
+            aliceLpBalance,
+            0, 
+            0,
+            alice,
+            block.timestamp + 1  
+        ); 
+
+        aliceBalance = degenator.balanceOf(alice);  
+        console.log("FINAL DGN AMOUNT AFTER ALL THAT WORK:", aliceBalance); 
+
+        //now she wants to sell her tokens and reclaim her lp
+        path[0] = address(degenator);  
+        path[1] = WETH; 
+        uniswapRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+            aliceBalance,
+            0, 
+            path, 
+            alice, 
+            block.timestamp + 1
+        ); 
+
+        vm.stopPrank(); 
+
+        
+        uint256 aliceWETH = IERC20(WETH).balanceOf(alice); 
+        assertGt(aliceWETH, 0); 
+
+        console.log("TOTAL GAINS", aliceWETH); 
+    }
+
+
+    function testSnipersCanSnipe() public {
+        address[] memory snipers = new address[](10); 
+        for (uint256 i = 0; i < snipers.length; i++) {
+            snipers[i] = address(uint160(i + 1)); 
+        }
+
+        //joel deploys liquidity
+        deal(WETH, address(this), 15e18); 
+        uint256 degenatorBalance = degenator.balanceOf(address(this)); 
+
+        //approve
+        degenator.approve(address(uniswapRouter), type(uint256).max); 
+        IERC20(WETH).approve(address(uniswapRouter), type(uint256).max); 
+
+        //add the liquidity (this would be joel)
+        uniswapRouter.addLiquidity(
+            address(degenator), 
+            WETH,
+            degenatorBalance,
+            15e18, 
+            0, 
+            0, 
+            address(this), 
+            block.timestamp + 1
+        ); 
+        
+        //set up the swap
+        address[] memory path = new address[](2);  
+        path[0] = WETH; 
+        path[1] = address(degenator); 
+        
+        for (uint i = 0; i < snipers.length; i++) {
+            deal(WETH, snipers[i], 0.05e18); 
+            vm.startPrank(snipers[i]);  
+                IERC20(WETH).approve(address(uniswapRouter), type(uint256).max);  
+                uniswapRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                    0.05e18, 
+                    0, 
+                    path, 
+                    snipers[i], 
+                    block.timestamp + 1
+                ); 
+
+            vm.stopPrank(); 
+        }
     }
 }
