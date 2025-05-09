@@ -42,7 +42,7 @@ contract DegenStakingTest is Test {
         
         lp = uniswapFactory.getPair(address(degenator), WETH); 
 
-        legendaryStaking = new LegendaryDegenStaking(degenator, lp, address(uniswapRouter), WETH); 
+        legendaryStaking = new LegendaryDegenStaking(degenator, lp); 
         owner = degenator.owner();
         deal(address(degenator), alice, 500_000_000e18);
     }

@@ -44,9 +44,31 @@ contract DegenStakingTest is Test {
         
         lp = uniswapFactory.getPair(address(degenator), WETH); 
 
-        legendaryStaking = new LegendaryDegenStaking(degenator, lp, address(uniswapRouter), WETH); 
+        legendaryStaking = new LegendaryDegenStaking(degenator, lp); 
         owner = degenator.owner();
         deal(address(degenator), alice, 500_000_000e18);
+
+        deal(WETH, address(this), 1e18);
+
+        uint256 amountADesired = 50_000_000e18;
+        uint256 amountBDesired = 1e18;
+        
+        IERC20(address(degenator)).approve(address(uniswapRouter), type(uint256).max);
+        IERC20(WETH).approve(address(uniswapRouter), type(uint256).max);
+
+        //IERC20(WETH).transferFrom(msg.sender, address(this), amountBDesired);
+
+        uniswapRouter.addLiquidity(
+            address(degenator),
+            WETH,
+            amountADesired,
+            amountBDesired,
+            amountADesired - amountADesired / 100,
+            amountBDesired - amountBDesired / 100,
+            owner,
+            block.timestamp
+        );
+
     }
 
     function testTiersSetup() public view {
@@ -92,10 +114,12 @@ contract DegenStakingTest is Test {
 
     function testStakePleb(uint96 amount) public {
         vm.assume(amount > 1e18); 
-        vm.assume(amount <= degenator.balanceOf(alice)); 
+        vm.assume(amount <= degenator.MAX_HOLD_AMOUNT()); 
 
-        vm.prank(alice); 
+        vm.startPrank(alice); 
+        degenator.approve(address(staking), type(uint256).max); 
         staking.stake(amount, 0);  
+        vm.stopPrank(); 
         
         (uint256 deposited, uint256 startTime, uint256 endTime) = staking.stakingBalances(alice, 0); 
 
@@ -132,10 +156,12 @@ contract DegenStakingTest is Test {
 
     function testStakeRookie(uint96 amount) public {
         vm.assume(amount > 1e18); 
-        vm.assume(amount <= degenator.balanceOf(alice)); 
+        vm.assume(amount <= degenator.MAX_HOLD_AMOUNT()); 
 
-        vm.prank(alice); 
+        vm.startPrank(alice); 
+        degenator.approve(address(staking), type(uint256).max); 
         staking.stake(amount, 1);  
+        vm.stopPrank(); 
         
         (uint256 deposited, uint256 startTime, uint256 endTime) = staking.stakingBalances(alice, 1); 
 
@@ -234,17 +260,21 @@ contract DegenStakingTest is Test {
     }
 
     function _stakeTier(uint256 amount, uint256 tier) internal {
-        vm.prank(alice); 
+        vm.startPrank(alice); 
+        degenator.approve(address(staking), type(uint256).max); 
         staking.stake(amount, tier);  
+        vm.stopPrank(); 
     }
 
     function testStakeLp() public {
         deal(lp, alice, 10e18); 
-        uint256 balance = IERC20(lp).balanceOf(alice); 
+        uint256 aliceBalance = IERC20(lp).balanceOf(alice); 
+
+        console2.log("alice balance ", aliceBalance); 
             
         vm.startPrank(alice); 
         IERC20(lp).approve(address(legendaryStaking), type(uint256).max); 
-        legendaryStaking.stake(balance, 0); 
+        legendaryStaking.stake(aliceBalance, 0); 
         vm.stopPrank(); 
 
         (uint256 deposited, uint256 lpAmount, uint256 startTime, uint256 endTime) = legendaryStaking.stakingBalances(alice, 0); 
@@ -254,7 +284,7 @@ contract DegenStakingTest is Test {
         uint256 balanceOfStakingContract = IERC20(lp).balanceOf(address(legendaryStaking)); 
         console2.log("STAKING CONTRACT BALANCE", balanceOfStakingContract); 
 
-        assertEq(deposited, balance); 
+        assertEq(lpAmount, aliceBalance); 
         assertEq(startTime, block.timestamp); 
         assertEq(endTime, 0); 
     }
@@ -279,5 +309,54 @@ contract DegenStakingTest is Test {
         uint256 returned = legendaryStaking.claim(0); 
         console2.log("amount returned", returned); 
     } 
+
+    function testEmergencyWithdraw() public {
+        deal(address(degenator), alice, 100e18); 
+
+        _stakeTier(100e18, 4); 
+        
+        vm.prank(alice); 
+        staking.unstake(4); 
+        (, , uint256 endTime) = staking.stakingBalances(alice, 4); 
+        assertEq(endTime, block.timestamp); 
+
+        
+        staking.toggleAllowEmergencyWithdraws(true);  
+
+
+        vm.prank(alice); 
+        staking.emergencyWithdraw(4); 
+        
+        uint256 bal = degenator.balanceOf(alice); 
+        assertEq(bal, 95e18); //alice gets her stake back minus rewards and tax
+    }
+
+    function testEmergencyWithdrawReverts() public {
+        deal(address(degenator), alice, 100e18); 
+
+        _stakeTier(100e18, 4); 
+        
+        vm.prank(alice); 
+        staking.unstake(4); 
+        (, , uint256 endTime) = staking.stakingBalances(alice, 4); 
+        assertEq(endTime, block.timestamp); 
+
+        
+        vm.expectRevert(abi.encodeWithSelector(DegenStaking.EmergencyWithdrawNotActive.selector)); 
+        vm.prank(alice); 
+        staking.emergencyWithdraw(4); 
+        
+        uint256 bal = degenator.balanceOf(alice); 
+        assertEq(bal, 0); //alice gets nothing back because we reverted
+    }
+
+    function testInvalidPid() public {
+        vm.startPrank(alice); 
+        degenator.approve(address(staking), type(uint256).max); 
+        
+        vm.expectRevert(abi.encodeWithSelector(DegenStaking.InvalidPid.selector)); 
+        staking.stake(100e18, 6);  
+        vm.stopPrank(); 
+    }
 
 }

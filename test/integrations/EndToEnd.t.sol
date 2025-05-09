@@ -13,15 +13,16 @@ import {IUniswapV2Factory} from "src/interfaces/IUniswapV2Factory.sol";
 contract EndToEndTest is Test {
 
     address lp; 
-    Degenator degenator; 
-    DegenStaking staking; 
-    LegendaryDegenStaking legendaryStaking; 
+    Degenator public degenator; 
+    DegenStaking public staking; 
+    LegendaryDegenStaking public legendaryStaking; 
 
     address immutable WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     IUniswapV2Router02 immutable uniswapRouter = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
     IUniswapV2Factory immutable uniswapFactory = IUniswapV2Factory(0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f); 
 
     address alice = address(69); 
+    address teamWallet = address(420); 
 
     function setUp() public {
         // precompute all addresses 
@@ -32,13 +33,15 @@ contract EndToEndTest is Test {
         degenator = new Degenator(
             computedStaking, 
             computedLegendary, 
-            address(this),
+            teamWallet,
             address(uniswapFactory), 
             address(uniswapRouter),
             WETH, 
             "Bozo",
             "BOZO"
         );
+
+        degenator.initialize(); 
 
         //deploy staking
         staking = new DegenStaking(degenator); 
@@ -47,16 +50,18 @@ contract EndToEndTest is Test {
         lp = uniswapFactory.getPair(address(degenator), WETH); 
 
         //deploy legendary staking
-        legendaryStaking = new LegendaryDegenStaking(degenator, lp, address(uniswapRouter), WETH); 
+        legendaryStaking = new LegendaryDegenStaking(degenator, lp); 
 
         uint256 degenatorBalance = degenator.balanceOf(address(this)); 
         assertEq(degenatorBalance, 1_000_000_000e18); 
 
         //whitelist this address
         degenator.addWhitelist(address(this)); 
+
     }
 
     function testEndToEndFlowRegularStaking() public {
+        degenator.changeMaxWalletAmount(100_000_000_000e18);
         //we start with WETH
         //
         //add some liquidity to the uniswap v2 pool 
@@ -73,7 +78,7 @@ contract EndToEndTest is Test {
             address(degenator), 
             WETH,
             degenatorBalance,
-            15e18, 
+            10e18, 
             0, 
             0, 
             address(this), 
@@ -110,7 +115,8 @@ contract EndToEndTest is Test {
         uint256 aliceBalance = degenator.balanceOf(alice); 
 
         //now alice can stake her DGN, she chooses max tier 
-        vm.prank(alice);  
+        vm.startPrank(alice);  
+        degenator.approve(address(staking), type(uint256).max); 
         staking.stake(aliceBalance, 4); 
         
         //we go a week into the future and check rewards 
@@ -174,6 +180,8 @@ contract EndToEndTest is Test {
     }
 
     function testEndToEndFlowLegendaryStaking() public {
+        degenator.changeMaxPot(300_000e18); 
+
         //we start with WETH
         //
         //add some liquidity to the uniswap v2 pool 
@@ -222,6 +230,7 @@ contract EndToEndTest is Test {
         assertGt(degenator.balanceOf(alice), 0); 
 
         //check that tax was taken on buy
+        console.log("CHECKING TAX"); 
         assertGt(degenator.balanceOf(address(degenator)), 0); 
         
         uint256 aliceBalance = degenator.balanceOf(alice); 
@@ -243,6 +252,9 @@ contract EndToEndTest is Test {
         ); 
 
         uint256 aliceLpBalance = IERC20(lp).balanceOf(alice); 
+
+        uint256 taxBalance = degenator.balanceOf(address(degenator)); 
+        console.log("CHECKING TAX SHOULD BE HIGHER: ", taxBalance); 
 
         legendaryStaking.stake(aliceLpBalance, 0); 
         vm.stopPrank(); 
@@ -294,7 +306,7 @@ contract EndToEndTest is Test {
         assertGt(aliceLpBalance, 0); 
 
         //turn off max tx amount (this would be way after sniper prevention)
-        degenator.changeMaxTxn(type(uint256).max - 1); 
+        degenator.changeMaxWalletAmount(type(uint256).max - 1); 
         
         vm.startPrank(alice); 
         degenator.approve(address(uniswapRouter), aliceBalance); 
@@ -313,6 +325,9 @@ contract EndToEndTest is Test {
         console.log("FINAL DGN AMOUNT AFTER ALL THAT WORK:", aliceBalance); 
 
         //now she wants to sell her tokens and reclaim her lp
+        
+        degenator.approve(address(uniswapRouter), type(uint256).max); 
+
         path[0] = address(degenator);  
         path[1] = WETH; 
         uniswapRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(
@@ -325,11 +340,16 @@ contract EndToEndTest is Test {
 
         vm.stopPrank(); 
 
+        taxBalance = degenator.balanceOf(address(degenator)); 
+        console.log("CHECKING TAX SHOULD BE HIGHER: ", taxBalance); 
         
         uint256 aliceWETH = IERC20(WETH).balanceOf(alice); 
         assertGt(aliceWETH, 0); 
 
         console.log("TOTAL GAINS", aliceWETH); 
+
+        uint256 payoutWalletBalance = IERC20(WETH).balanceOf(teamWallet); 
+        console.log("TEAM WALLET EARNED:", payoutWalletBalance); 
     }
 
 
@@ -365,7 +385,8 @@ contract EndToEndTest is Test {
         path[1] = address(degenator); 
         
         for (uint i = 0; i < snipers.length; i++) {
-            deal(WETH, snipers[i], 0.05e18); 
+            deal(WETH, snipers[i], 0.5e18); 
+            degenator.addWhitelist(snipers[i]); 
             vm.startPrank(snipers[i]);  
                 IERC20(WETH).approve(address(uniswapRouter), type(uint256).max);  
                 uniswapRouter.swapExactTokensForTokensSupportingFeeOnTransferTokens(

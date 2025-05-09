@@ -8,40 +8,67 @@ import {IUniswapV2Factory} from "./interfaces/IUniswapV2Factory.sol";
 import {IUniswapV2Router02} from "./interfaces/IUniswapV2Router02.sol";
 
 contract Degenator is ERC20, Owned {
-    uint256 public TAX_AMOUNT = 5;
-    uint256 public TAX_POT_MAX = 500_000e18;
 
+    /// @notice tax amount
+    uint256 public TAX_AMOUNT = 5;
+
+    uint256 public TAX_POT_MAX = 500_000e18;
+    
+    /// @notice max amount that can be transfered
     uint256 public MAX_TX_AMOUNT = 10_000_000e18; 
 
+    /// @notice max amount that can be held by any wallet
+    uint256 public MAX_HOLD_AMOUNT = 10_000_000e18; 
+    
+    /// @notice list of whitelsited addresses to not be taxed (staking contracts, etc)
     mapping(address => bool) internal whitelist; 
-
+    
+    /// @notice uniswap addresses
     IUniswapV2Factory immutable uniswapFactory;
     IUniswapV2Router02 immutable uniswapRouter;
     address internal immutable WETH; 
-
+    
+    /// @notice lp staking pair
     address public tokenPair;
+
+    /// @notice token staking contract address 
     address public stakingContract;
+
+    /// @notice legendary token staking contract address 
     address public legendaryStakingContract; 
+
     address internal teamWallet;
 
     bool public tradingPaused = false;
+
+    bool public whitelistOn = true; 
+
     //@dev bool to control taxing during trasfers for dex swaps
     bool public isTaxOn = false;
+    //@dev flag for if we are in a swap or not
     bool internal inSwapEvent = false; 
+    
 
+    /////////////////////////////// ERRORS ///////////////////////////////
+    
     error TaxTooHigh();
-    error AboveMaximumTxnAmount(); 
     error TradingIsPaused(); 
+    error MaxWalletAmount(); 
+
+    /////////////////////////////// EVENTS ///////////////////////////////
 
     event TaxAmountChanged(uint256 newTaxAmount);
     event TradingPaused(bool, uint256 block);
     event Tax(address indexed sender, uint256 taxAmount);
     event MaxPotChanged(uint256 newPotMax);
-    event MaxTxnAmountChanged(uint256 newTxnAmount); 
+    event MaxWalletAmountChanged(uint256 newAmount); 
     event ToggleTax(bool);
     event ChangePayout(address indexed newWallet);
     event Whitelisted(address indexed user); 
+    event Unwhitelisted(address indexed user); 
 
+    /////////////////////////////// MODIFIERS ///////////////////////////////
+    
     modifier onlyStaking() virtual {
         require(msg.sender == stakingContract || msg.sender == legendaryStakingContract, "UNAUTHORIZED");
         _;
@@ -53,6 +80,8 @@ contract Degenator is ERC20, Owned {
       inSwapEvent = false; 
     }
 
+    /////////////////////////////// CONSTRUCTOR ///////////////////////////////
+    
     constructor(
         address _stakingContract, 
         address _legendaryStakingContract, 
@@ -77,7 +106,11 @@ contract Degenator is ERC20, Owned {
 
         whitelist[teamWallet] = true; 
         whitelist[tokenPair] = true; 
+        whitelist[stakingContract] = true; 
+        whitelist[legendaryStakingContract] = true; 
     }
+
+    /////////////////////////////// PERMISSIONED FUNCTIONS ///////////////////////////////
 
     function initialize() external onlyOwner {
         IERC20(address(this)).approve(address(uniswapRouter), type(uint256).max);
@@ -115,9 +148,9 @@ contract Degenator is ERC20, Owned {
         emit MaxPotChanged(newPotMax);
     }
 
-    function changeMaxTxn(uint256 newTxnAmount) external onlyOwner {
-        MAX_TX_AMOUNT = newTxnAmount; 
-        emit MaxTxnAmountChanged(newTxnAmount); 
+    function changeMaxWalletAmount(uint256 newAmount) external onlyOwner {
+        MAX_HOLD_AMOUNT = newAmount; 
+        emit MaxWalletAmountChanged(newAmount); 
     }
 
     function toggleTax(bool value) external onlyOwner {
@@ -135,6 +168,11 @@ contract Degenator is ERC20, Owned {
         emit Whitelisted(user); 
     }
 
+    function removeWhitelist(address user) external onlyOwner {
+        whitelist[user] = false; 
+        emit Unwhitelisted(user); 
+    }
+
     //@dev in case something goes wrong and we end up with a different liquidity token address(this shouldn't happen but just in case)
     function updateTokenPair(address newTokenPair) external onlyOwner {
         tokenPair = newTokenPair;
@@ -148,6 +186,12 @@ contract Degenator is ERC20, Owned {
         legendaryStakingContract = newLegendaryStaking; 
     }
 
+    function toggleWhitelist(bool onOrOff) external onlyOwner {
+        whitelistOn = onOrOff; 
+    }
+
+    /////////////////////////////// INTERNAL FUNCTIONS ///////////////////////////////
+    
     function _addTax(uint256 amount) internal view returns (uint256) {
         return (amount * TAX_AMOUNT) / 100;
     }
@@ -162,13 +206,13 @@ contract Degenator is ERC20, Owned {
             balanceOf[address(this)], 0, path, teamWallet, block.timestamp
         );
     }
-
-    function _transfer(address from, address to, uint256 amount) public returns (bool) {
+    
+    function _transfer(address from, address to, uint256 amount) internal returns (bool) {
         if (tradingPaused) revert TradingIsPaused(); 
          
-        if (!whitelist[from]) {
-            if (amount > MAX_TX_AMOUNT) revert AboveMaximumTxnAmount(); 
-        }
+        //if (!whitelist[from]) {
+        //    if (amount > MAX_TX_AMOUNT) revert MaxWalletAmount(); 
+        //}
         
         if (balanceOf[address(this)] >= TAX_POT_MAX && 
             isTaxOn && 
@@ -177,23 +221,28 @@ contract Degenator is ERC20, Owned {
             _swapAndPayOut();
         }
 
-        balanceOf[from] -= amount;
-
-        // Cannot overflow because the sum of all user
-        // balances can't exceed the max uint256 value.
-        if (from == owner || from == address(this) || from == stakingContract) {
-            unchecked {
-                balanceOf[to] += amount;
-            }
-        } else {
-            unchecked {
-                balanceOf[to] += amount - _addTax(amount);
-                balanceOf[address(this)] += _addTax(amount);
-            }
+        uint256 taxAmount = 0; 
+        if (!(from == owner || from == address(this) || from == stakingContract || from == legendaryStakingContract)) {
+            taxAmount = _addTax(amount);
         }
 
-        emit Transfer(from, to, amount - _addTax(amount));
-        emit Tax(from, _addTax(amount));
+        uint256 transferAmount = amount - taxAmount;
+        
+        if (!whitelist[to]) {
+            if (balanceOf[to] + transferAmount > MAX_HOLD_AMOUNT) revert MaxWalletAmount(); 
+        }
+
+        balanceOf[from] -= amount;
+        balanceOf[to] += transferAmount;
+
+        if (taxAmount > 0) {
+            balanceOf[address(this)] += taxAmount;
+        }
+
+        emit Transfer(from, to, transferAmount);
+        if (taxAmount > 0) {
+            emit Tax(from, taxAmount);
+        }
         
         return true;
     }
@@ -204,6 +253,10 @@ contract Degenator is ERC20, Owned {
     }
 
     function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
+        uint256 allowed = allowance[from][msg.sender]; // Saves gas for limited approvals.
+
+        if (allowed != type(uint256).max) allowance[from][msg.sender] = allowed - amount;
+
         bool success = _transfer(from, to, amount); 
         return success; 
     }

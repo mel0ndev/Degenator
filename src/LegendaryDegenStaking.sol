@@ -14,6 +14,8 @@ contract LegendaryDegenStaking is Owned {
     Degenator public degenator; 
     address public degenatorLP;
 
+    //TODO add emergency withdraw
+
     struct StakingBalance {
         uint256 deposited;
         uint256 lpAmount; 
@@ -28,11 +30,12 @@ contract LegendaryDegenStaking is Owned {
         uint256 unstakeDuration; 
     }
 
-    address public immutable WETH; 
-    IUniswapV2Router02 public immutable uniswapRouter; 
 
     uint256 internal constant DENOMINATOR = 1e19; 
     uint256 internal constant YEAR = 60 * 60 * 24 * 365; 
+
+    uint256 public pids; 
+    bool public allowEmergencyWithdraws = false; 
 
     mapping(address user => mapping(uint256 pid => StakingBalance)) public stakingBalances; //user can have a per pid staking balance
     mapping(uint256 pid => StakingTier) public tiers; 
@@ -40,17 +43,19 @@ contract LegendaryDegenStaking is Owned {
     event Staked(address indexed staker, uint256 amount, uint256 timestamp);
     event Unstaked(address indexed staker, uint256 timestamp);
     event Claim(address indexed staker, uint256 amount, uint256 timestamp);
+    event EmergencyWithdrawActive(); 
+    event EmergencyWithdraw(address indexed staker, uint256 amount); 
 
     error ZeroAmount();
 	error PeriodNotFinished(); 
 	error PeriodStillActive(); 
 	error PeriodAlreadyStarted(); 
+    error InvalidPid(); 
+    error EmergencyWithdrawNotActive(); 
 
-    constructor(Degenator _degenator, address _degenatorLP, address _router, address _weth) Owned(msg.sender) {
+    constructor(Degenator _degenator, address _degenatorLP) Owned(msg.sender) {
         degenator = _degenator; 
         degenatorLP = _degenatorLP; 
-        uniswapRouter = IUniswapV2Router02(_router); 
-        WETH = _weth; 
         //initialize staking tiers
         //legendary degenator tier
         tiers[0] = StakingTier({
@@ -59,6 +64,8 @@ contract LegendaryDegenStaking is Owned {
             bonus: 900e17, //900%
             unstakeDuration: 60 hours
         }); 
+
+        pids = 1; 
     }
 
     /* 
@@ -67,6 +74,7 @@ contract LegendaryDegenStaking is Owned {
     * @dev the final amount staked is inclusive of the tax
     */
     function stake(uint256 amount, uint256 pid) external {
+        if (pid > pids - 1) revert InvalidPid(); 
         if (amount == 0) revert ZeroAmount();
 		if (stakingBalances[msg.sender][pid].stakeEnd != 0) revert PeriodStillActive(); 
 		
@@ -90,6 +98,7 @@ contract LegendaryDegenStaking is Owned {
     * @param pid - the pool id (tier) to unstake from
     */
     function unstake(uint256 pid) external {
+        if (pid > pids - 1) revert InvalidPid(); 
         StakingBalance storage user = stakingBalances[msg.sender][pid];
 		
 		if (user.stakeEnd != 0) revert PeriodAlreadyStarted(); 
@@ -103,28 +112,55 @@ contract LegendaryDegenStaking is Owned {
 	* @dev a user must claim before being able to restake
     */
     function claim(uint256 pid) external returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
         StakingBalance storage user = stakingBalances[msg.sender][pid]; 
         StakingTier memory tier = tiers[pid]; 
 
         if (block.timestamp < user.stakeEnd + tier.unstakeDuration || user.stakeEnd == 0) {
 			revert PeriodNotFinished(); 
 		}
-
+        
+        //subtract the DGN portion since it should only apply to rewards, but users will get their LP back, making up the difference
         uint256 amountToWithdraw = multiplyStakingBalance(msg.sender, pid) - user.deposited;
+        uint256 lpCachedAmount = user.lpAmount; 
 
         user.deposited = 0;
+        user.lpAmount = 0; 
         user.stakeStart = 0;
         user.stakeEnd = 0;
 
         //mint the entire amount on unstake minus deposit amount because it is lp token
         degenator.mint(msg.sender, amountToWithdraw);
         //send the user's lp back to them
-        ERC20(degenatorLP).safeTransfer(msg.sender, user.lpAmount);
+        ERC20(degenatorLP).safeTransfer(msg.sender, lpCachedAmount);
 
         emit Claim(msg.sender, amountToWithdraw, block.timestamp);
 
         return amountToWithdraw;
     }
+
+    function toggleAllowEmergencyWithdraws(bool allow) external onlyOwner {
+        allowEmergencyWithdraws = allow; 
+        emit EmergencyWithdrawActive(); 
+    }
+
+    function emergencyWithdraw(uint256 pid) external {
+        if (pid > pids - 1) revert InvalidPid(); 
+        if (!allowEmergencyWithdraws) revert EmergencyWithdrawNotActive(); 
+        
+        //cache initial deposit
+        uint256 startingBalance = stakingBalances[msg.sender][pid].lpAmount;
+
+        stakingBalances[msg.sender][pid].deposited = 0;
+        stakingBalances[msg.sender][pid].lpAmount= 0;
+        stakingBalances[msg.sender][pid].stakeStart = 0;
+        stakingBalances[msg.sender][pid].stakeEnd = 0;
+
+        SafeTransferLib.safeTransfer(ERC20(degenatorLP), msg.sender, startingBalance); 
+
+        emit EmergencyWithdraw(msg.sender, startingBalance); 
+    }
+
 
     /* 
     * @notice used to calculate the withdraw balance per user, per pid based on staking time 
@@ -132,6 +168,8 @@ contract LegendaryDegenStaking is Owned {
     * @param pid - the pool id (tier) to calculate for
     */
     function multiplyStakingBalance(address user, uint256 pid) public view returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
+
 		uint256 end; 
 		if (stakingBalances[user][pid].stakeEnd == 0) {
 			end = block.timestamp; 
@@ -156,6 +194,8 @@ contract LegendaryDegenStaking is Owned {
      * @return the total amount to be withdrawn, inclusive of initial deposit amount
      */ 
     function _getWithdrawAmount(uint256 amount, uint256 timeStaked, uint256 pid) internal view returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
+
         StakingTier memory tierInfo = tiers[pid];     
         uint256 rewardPerSecond = _getRewardPerSecond(amount, tierInfo); 
         uint256 totalRewards = amount + (rewardPerSecond * timeStaked); 

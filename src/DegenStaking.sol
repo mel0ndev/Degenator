@@ -5,12 +5,11 @@ import {Owned} from "solmate/auth/Owned.sol";
 import {SafeTransferLib} from "solmate/utils/SafeTransferLib.sol";
 import {Degenator} from "./Degenator.sol";
 
-import "forge-std/Test.sol"; 
-
-contract DegenStaking is Owned, Test {
+contract DegenStaking is Owned {
     using SafeTransferLib for ERC20;
 
     Degenator public degenator;
+
 
     struct StakingBalance {
         uint256 deposited;
@@ -28,17 +27,24 @@ contract DegenStaking is Owned, Test {
     uint256 internal constant DENOMINATOR = 1e19; 
     uint256 internal constant YEAR = 60 * 60 * 24 * 365; 
 
+    uint256 public pids; 
+    bool public allowEmergencyWithdraws = false; 
+
     mapping(address user => mapping(uint256 pid => StakingBalance)) public stakingBalances; //user can have a per pid staking balance
     mapping(uint256 pid => StakingTier) public tiers; 
 
     event Staked(address indexed staker, uint256 amount, uint256 timestamp);
     event Unstaked(address indexed staker, uint256 timestamp);
     event Claim(address indexed staker, uint256 amount, uint256 timestamp);
+    event EmergencyWithdrawActive(); 
+    event EmergencyWithdraw(address indexed staker, uint256 amount); 
 
     error ZeroAmount();
 	error PeriodNotFinished(); 
 	error PeriodStillActive(); 
 	error PeriodAlreadyStarted(); 
+    error InvalidPid(); 
+    error EmergencyWithdrawNotActive(); 
 
     constructor(Degenator _degenator) Owned(msg.sender) {
         degenator = _degenator; 
@@ -83,6 +89,8 @@ contract DegenStaking is Owned, Test {
             bonus: 168e17, //168% 
             unstakeDuration: 48 hours
         }); 
+
+        pids = 5; 
     }
 
     /* 
@@ -91,6 +99,7 @@ contract DegenStaking is Owned, Test {
     * @dev the final amount staked is inclusive of the tax
     */
     function stake(uint256 amount, uint256 pid) external {
+        if (pid > pids - 1) revert InvalidPid(); 
         if (amount == 0) revert ZeroAmount();
 		if (stakingBalances[msg.sender][pid].stakeEnd != 0) revert PeriodStillActive(); 
 		
@@ -113,6 +122,7 @@ contract DegenStaking is Owned, Test {
     * @param pid - the pool id (tier) to unstake from
     */
     function unstake(uint256 pid) external {
+        if (pid > pids - 1) revert InvalidPid(); 
         StakingBalance storage user = stakingBalances[msg.sender][pid];
 		
 		if (user.stakeEnd != 0) revert PeriodAlreadyStarted(); 
@@ -126,6 +136,7 @@ contract DegenStaking is Owned, Test {
 	* @dev a user must claim before being able to restake
     */
     function claim(uint256 pid) external returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
         StakingBalance storage user = stakingBalances[msg.sender][pid]; 
         StakingTier memory tier = tiers[pid]; 
 
@@ -150,12 +161,41 @@ contract DegenStaking is Owned, Test {
         return amountToWithdraw;
     }
 
+    function toggleAllowEmergencyWithdraws(bool allow) external onlyOwner {
+        allowEmergencyWithdraws = allow; 
+        emit EmergencyWithdrawActive(); 
+    }
+    
+    /**
+    * @notice sends back initial deposit to user, forfeiting rewards
+    * @param pid the pool id user deposited into
+    * @dev requires `allowEmergencyWithdraws` to be true
+    */ 
+    function emergencyWithdraw(uint256 pid) external {
+        if (pid > pids - 1) revert InvalidPid(); 
+        if (!allowEmergencyWithdraws) revert EmergencyWithdrawNotActive(); 
+        
+        //cache the starting balance
+        uint256 startingBalance = stakingBalances[msg.sender][pid].deposited;
+        
+        //reset everything to 0
+        stakingBalances[msg.sender][pid].deposited = 0;
+        stakingBalances[msg.sender][pid].stakeStart = 0;
+        stakingBalances[msg.sender][pid].stakeEnd = 0;
+        
+        //send back initial deposit
+        SafeTransferLib.safeTransfer(degenator, msg.sender, startingBalance); 
+
+        emit EmergencyWithdraw(msg.sender, startingBalance); 
+    }
+
     /* 
     * @notice used to calculate the withdraw balance per user, per pid based on staking time 
     * @param user - the address of the user to calculate the balance for 
     * @param pid - the pool id (tier) to calculate for
     */
     function multiplyStakingBalance(address user, uint256 pid) public view returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
 		uint256 end; 
 		if (stakingBalances[user][pid].stakeEnd == 0) {
 			end = block.timestamp; 
@@ -176,6 +216,7 @@ contract DegenStaking is Owned, Test {
      * @return the total amount to be withdrawn, inclusive of initial deposit amount
      */ 
     function _getWithdrawAmount(uint256 amount, uint256 timeStaked, uint256 pid) internal view returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
         StakingTier memory tierInfo = tiers[pid];     
         uint256 rewardPerSecond = _getRewardPerSecond(amount, tierInfo); 
         uint256 totalRewards = amount + (rewardPerSecond * timeStaked); 
@@ -212,12 +253,18 @@ contract DegenStaking is Owned, Test {
     ////////// HELPER FUNCTIONS ////////// 
 
     function earned(address user, uint256 pid) external view returns (uint256) {
+        if (pid > pids - 1) revert InvalidPid(); 
         return multiplyStakingBalance(user, pid); 
     }
 
     function _getRewardPerSecond(uint256 amount, StakingTier memory tierInfo) internal view returns (uint256) {
         uint256 rewardPerSecond = amount * tierInfo.apy / YEAR / DENOMINATOR;  
         return rewardPerSecond; 
+    }
+
+    function addPid(StakingTier memory newStakingTier) external onlyOwner {
+        tiers[pids] = newStakingTier; 
+        pids += 1;          
     }
 
 }

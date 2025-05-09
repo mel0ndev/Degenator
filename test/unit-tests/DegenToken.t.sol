@@ -70,28 +70,30 @@ contract DegenatorTest is Test {
    //) external;
     
     function testTransfer() external {
-      deal(address(degenator), address(this), 100e18); 
-      uint256 balance420 = degenator.balanceOf(address(420)); 
-      console2.log(balance420); 
-      degenator.transfer(address(420), 100e18);     
-      balance420 = degenator.balanceOf(address(420)); 
-      console2.log(balance420); 
+        degenator.changeMaxWalletAmount(type(uint256).max - 1); 
+        deal(address(degenator), address(this), 100e18); 
+        uint256 balance420 = degenator.balanceOf(address(420)); 
+        console2.log(balance420); 
+        degenator.transfer(address(420), 100e18);     
+        balance420 = degenator.balanceOf(address(420)); 
+        console2.log(balance420); 
     }
 
     function testTransferFrom() external {
-      deal(address(degenator), bob, 100e18); 
+        degenator.changeMaxWalletAmount(type(uint256).max - 1); 
+        deal(address(degenator), bob, 100e18); 
 
-      uint256 balance420 = degenator.balanceOf(address(420)); 
-      console2.log(balance420); 
+        uint256 balance420 = degenator.balanceOf(bob); 
+        console2.log(balance420); 
 
-      vm.prank(bob); 
-        degenator.approve(alice, type(uint256).max); 
+        vm.prank(bob); 
+          degenator.approve(alice, type(uint256).max); 
 
-      vm.prank(alice); 
-        degenator.transferFrom(address(this), alice, 100e18); 
+        vm.prank(alice); 
+          degenator.transferFrom(bob, alice, 100e18); 
 
-      balance420 = degenator.balanceOf(address(420)); 
-      console2.log(balance420); 
+        balance420 = degenator.balanceOf(address(420)); 
+        console2.log(balance420); 
     }
 
     function testUniswapV2SwapDGNToWETH() external {
@@ -239,6 +241,7 @@ contract DegenatorTest is Test {
 
     //no way to tax amounts under 10, but users are losing money to gas, so it's not profitable for them to do so
     function testTransfer(uint96 amount) external {
+        degenator.changeMaxWalletAmount(type(uint256).max - 1); 
         uint256 aliceBalance = degenator.balanceOf(alice);
         uint256 tax = degenator.TAX_AMOUNT();
         deal(address(degenator), alice, amount);
@@ -280,6 +283,7 @@ contract DegenatorTest is Test {
     }
 
     function testTransferFrom(uint96 amount) external {
+        degenator.changeMaxWalletAmount(type(uint256).max - 1); 
         uint256 contractBal = degenator.balanceOf(address(this));
         vm.prank(degenator.owner());
 
@@ -344,17 +348,17 @@ contract DegenatorTest is Test {
     }
 
     function testSendToSelf() public {
-      uint256 aliceBalance = degenator.balanceOf(alice);
-      console2.log("BALANCE START", aliceBalance); 
-      vm.startPrank(alice); 
-      degenator.transfer(alice, aliceBalance); 
-      uint256 tax = degenator.TAX_AMOUNT();
-      console2.log("TAX AMOUNT", tax); 
-      uint256 aliceBalanceAfter = degenator.balanceOf(alice);
+        degenator.changeMaxWalletAmount(type(uint256).max - 1); 
 
-      assertEq(aliceBalanceAfter, aliceBalance - (aliceBalance * tax) / 100); 
-      console2.log("BALANCE END", aliceBalanceAfter); 
-      
+        uint256 aliceBalance = degenator.balanceOf(alice);
+        console2.log("BALANCE START", aliceBalance); 
+        vm.startPrank(alice); 
+        degenator.transfer(alice, aliceBalance); 
+        uint256 tax = degenator.TAX_AMOUNT();
+        console2.log("TAX AMOUNT", tax); 
+        uint256 aliceBalanceAfter = degenator.balanceOf(alice);
+
+        assertEq(aliceBalanceAfter, aliceBalance - (aliceBalance * tax) / 100); 
+        console2.log("BALANCE END", aliceBalanceAfter); 
     }
-
 }
