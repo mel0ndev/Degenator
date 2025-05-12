@@ -31,6 +31,8 @@ contract Deploy is Script {
     function run() public {
         vm.startBroadcast(vm.envUint("PRIVATE_KEY")); 
 
+        console2.log("SENDER WALLET: ", msg.sender); 
+
         uint256 nonce = vm.getNonce(shitcoinDeployer);
         address degenStakingAddress = vm.computeCreateAddress(shitcoinDeployer, nonce + 1);
         address legendaryStakingAddress = vm.computeCreateAddress(shitcoinDeployer, nonce + 2);

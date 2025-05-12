@@ -179,8 +179,6 @@ contract LegendaryDegenStaking is Owned {
         uint256 timeStaked = (end - stakingBalances[user][pid].stakeStart);
         uint256 startingBalance = stakingBalances[user][pid].deposited;
 
-        uint256 hoursStaked = timeStaked / 1 hours;
-
         
         uint256 a = _getWithdrawAmount(startingBalance, timeStaked, pid); 
         return a; 

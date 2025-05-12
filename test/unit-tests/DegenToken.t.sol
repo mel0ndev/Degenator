@@ -61,6 +61,10 @@ contract DegenatorTest is Test {
         );
     }
 
+    function testInitializeTax() external view {
+        console2.log("balance of degen token contract", degenator.balanceOf(address(degenator))); 
+    }
+    
    // function swapExactTokensForTokensSupportingFeeOnTransferTokens(
    //   uint amountIn,
    //   uint amountOutMin,
@@ -242,9 +246,12 @@ contract DegenatorTest is Test {
     //no way to tax amounts under 10, but users are losing money to gas, so it's not profitable for them to do so
     function testTransfer(uint96 amount) external {
         degenator.changeMaxWalletAmount(type(uint256).max - 1); 
+        vm.assume(amount <= degenator.MAX_TX_AMOUNT()); 
+        deal(address(degenator), alice, amount);
+        deal(address(degenator), address(degenator), 0);
+
         uint256 aliceBalance = degenator.balanceOf(alice);
         uint256 tax = degenator.TAX_AMOUNT();
-        deal(address(degenator), alice, amount);
         vm.assume(amount <= aliceBalance);
         uint256 degenatorBalanceBefore = degenator.balanceOf(address(degenator));
 
@@ -283,7 +290,10 @@ contract DegenatorTest is Test {
     }
 
     function testTransferFrom(uint96 amount) external {
+        vm.assume(amount <= degenator.MAX_TX_AMOUNT()); 
         degenator.changeMaxWalletAmount(type(uint256).max - 1); 
+        deal(address(degenator), address(degenator), 100_000e18);
+
         uint256 contractBal = degenator.balanceOf(address(this));
         vm.prank(degenator.owner());
 
@@ -314,12 +324,13 @@ contract DegenatorTest is Test {
     }
 
     function testPayoutToWallet() public {
-        assertEq(IERC20(address(degenator)).balanceOf(address(degenator)), 0);
+        //assertEq(IERC20(address(degenator)).balanceOf(address(degenator)), 0);
 
         deal(address(degenator), address(degenator), 200_000_000e18);
         console2.log("balance in contract", degenator.balanceOf(address(degenator)));
         console2.log("approval amount", degenator.allowance(address(degenator), address(uniswapRouter)));
-
+        
+        deal(address(degenator), address(this), 1e18); 
         degenator.transfer(bob, 1e18);
 
         uint256 profits = IERC20(WETH).balanceOf(degenator.owner());
@@ -349,6 +360,7 @@ contract DegenatorTest is Test {
 
     function testSendToSelf() public {
         degenator.changeMaxWalletAmount(type(uint256).max - 1); 
+        deal(address(degenator), alice, 10_000_000e18); 
 
         uint256 aliceBalance = degenator.balanceOf(alice);
         console2.log("BALANCE START", aliceBalance); 

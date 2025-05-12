@@ -257,7 +257,7 @@ contract DegenStaking is Owned {
         return multiplyStakingBalance(user, pid); 
     }
 
-    function _getRewardPerSecond(uint256 amount, StakingTier memory tierInfo) internal view returns (uint256) {
+    function _getRewardPerSecond(uint256 amount, StakingTier memory tierInfo) internal pure returns (uint256) {
         uint256 rewardPerSecond = amount * tierInfo.apy / YEAR / DENOMINATOR;  
         return rewardPerSecond; 
     }
